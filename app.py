@@ -19,7 +19,7 @@ st.markdown("""<style>
 
 st.markdown("""<div class="hero"><h1>🚀 AlphaPilot AI</h1>
 <p>Turn Binance market data into explainable crypto intelligence.</p>
-<span class="badge">READ-ONLY • HACKATHON PROTOTYPE • LIVE MARKET DATA</span></div>""",unsafe_allow_html=True)
+<span class="badge">BINANCE AGENT OS • MCP-FIRST • READ-ONLY</span></div>""",unsafe_allow_html=True)
 
 symbol=st.text_input("Enter a Binance symbol","SOLUSDT").upper().strip()
 c1,c2=st.columns([1,5])
@@ -28,9 +28,19 @@ with c2: st.caption("Try: SOLUSDT · BTCUSDT · ETHUSDT · BNBUSDT")
 
 if go_btn:
     try:
-        with st.spinner(f"Scanning {symbol} market signals..."):
+        with st.spinner(f"Querying Binance Agent OS for {symbol}..."):
             snap=snapshot(symbol); report=analyze(symbol,snap)
         m=report["metrics"]; k=snap["klines"]
+
+        if snap.get("source") == "Binance Agent OS MCP":
+            st.success("🔌 Binance Agent OS MCP connected — market data retrieved through MCP.")
+            with st.expander("MCP tools used"):
+                st.json(snap.get("mcp_tools", {}))
+        else:
+            st.warning("⚠️ Binance MCP was temporarily unavailable. Using public Binance market-data fallback.")
+            if snap.get("mcp_error"):
+                st.caption(snap["mcp_error"])
+
         st.divider()
         a,b,c=st.columns([1.15,1,1])
         with a:
@@ -77,6 +87,6 @@ if go_btn:
     except Exception as e:
         st.error(f"Could not analyze {symbol}."); st.caption(f"Technical detail: {e}")
 else:
-    st.markdown('<div class="card"><h3>How AlphaPilot works</h3><p>1️⃣ Pull live public Binance market data → 2️⃣ score momentum, volume, liquidity and sentiment proxy → 3️⃣ scan volatility risk → 4️⃣ explain the result in plain English.</p></div>',unsafe_allow_html=True)
+    st.markdown('<div class="card"><h3>How AlphaPilot works</h3><p>1️⃣ Binance Agent OS MCP → 2️⃣ market signals → 3️⃣ Alpha Score → 4️⃣ explainable risk analysis.</p></div>',unsafe_allow_html=True)
 
-st.markdown('<div class="footer">AlphaPilot AI • Binance Agent OS Mini Hackathon • Read-only prototype</div>',unsafe_allow_html=True)
+st.markdown('<div class="footer">AlphaPilot AI • Binance Agent OS Mini Hackathon • MCP-first read-only prototype</div>',unsafe_allow_html=True)
