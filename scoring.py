@@ -1,27 +1,257 @@
-def compute(data):
-    change = data["change_pct"]
-    pressure = data["pressure"]
-    vr = data["volume_ratio"]
-    closes = data["closes"]
-    momentum = (closes[-1] / closes[-20] - 1) * 100 if len(closes) >= 20 else change
+def clamp(x):
+    return max(0, min(100, float(x)))
 
-    score = 50
-    score += max(-20, min(20, momentum * 4))
-    score += max(-10, min(10, (pressure - 1) * 30))
-    score += max(-10, min(10, (vr - 1) * 12))
-    score = int(max(0, min(100, round(score))))
 
-    regime = ("Constructive" if score >= 70 else
-              "Cautious Positive" if score >= 55 else
-              "Neutral / Cautious" if score >= 40 else "Defensive")
-    momentum_label = ("Strong" if momentum > 2 else "Positive" if momentum > 0.5
-                      else "Weak" if momentum < -1 else "Flat")
-    volume_label = "High" if vr > 1.25 else "Normal" if vr >= 0.8 else "Low"
-    pressure_label = ("Buy-side" if pressure > 1.08 else
-                      "Sell-side" if pressure < 0.92 else "Balanced")
-    risk_label = ("High" if score < 40 or abs(change) > 7 else
-                  "Medium" if score < 60 else "Lower")
+def pct_return(close, p):
+    if len(close) <= p:
+        return 0.0
 
-    return {"score": score, "regime": regime, "momentum": momentum,
-            "momentum_label": momentum_label, "volume_label": volume_label,
-            "pressure_label": pressure_label, "risk_label": risk_label}
+    return (
+        close.iloc[-1] / close.iloc[-1 - p] - 1
+    ) * 100
+
+
+def compute(snap):
+
+    ticker = snap["ticker"]
+    klines = snap["klines"]
+    order_book = snap["order_book"]
+
+    # -----------------------------------------------------
+    # PRICE DATA
+    # -----------------------------------------------------
+
+    close = klines["close"]
+
+    # Binance kline data may expose either:
+    #
+    # quote_volume
+    #
+    # or:
+    #
+    # volume
+    #
+    # Prefer quote_volume because it represents quote-asset
+    # traded value, but gracefully fall back to base volume.
+
+    if "quote_volume" in klines.columns:
+        volume = klines["quote_volume"]
+
+    elif "volume" in klines.columns:
+        volume = klines["volume"]
+
+    else:
+        raise ValueError(
+            "Kline data contains neither 'quote_volume' nor 'volume'. "
+            f"Available columns: {list(klines.columns)}"
+        )
+
+    # -----------------------------------------------------
+    # 24H CHANGE
+    # -----------------------------------------------------
+
+    change = float(
+        ticker.get("priceChangePercent", 0)
+    )
+
+    # -----------------------------------------------------
+    # MOMENTUM
+    # -----------------------------------------------------
+
+    mom6 = pct_return(
+        close,
+        6,
+    )
+
+    mom24 = pct_return(
+        close,
+        min(24, len(close) - 1),
+    )
+
+    # -----------------------------------------------------
+    # VOLUME
+    # -----------------------------------------------------
+
+    if len(volume) > 25:
+
+        baseline = volume.iloc[-25:-1].mean()
+
+    else:
+
+        baseline = volume.mean()
+
+    if baseline:
+
+        vr = float(
+            volume.iloc[-1] / baseline
+        )
+
+    else:
+
+        vr = 1.0
+
+    # -----------------------------------------------------
+    # VOLATILITY
+    # -----------------------------------------------------
+
+    ret = (
+        close.pct_change()
+        .dropna()
+        * 100
+    )
+
+    if len(ret) > 1:
+
+        vol = float(
+            ret.tail(24).std()
+        )
+
+    else:
+
+        vol = 0.0
+
+    # -----------------------------------------------------
+    # CURRENT PRICE
+    # -----------------------------------------------------
+
+    last = float(
+        close.iloc[-1]
+    )
+
+    # -----------------------------------------------------
+    # 24H RANGE
+    # -----------------------------------------------------
+
+    range_high = float(
+        klines["high"]
+        .tail(24)
+        .max()
+    )
+
+    range_low = float(
+        klines["low"]
+        .tail(24)
+        .min()
+    )
+
+    rng = (
+        (range_high - range_low)
+        / last
+        * 100
+    )
+
+    # -----------------------------------------------------
+    # ORDER BOOK
+    # -----------------------------------------------------
+
+    bids = sum(
+        float(x[1])
+        for x in order_book.get("bids", [])
+    )
+
+    asks = sum(
+        float(x[1])
+        for x in order_book.get("asks", [])
+    )
+
+    if bids + asks:
+
+        imb = (
+            (bids - asks)
+            / (bids + asks)
+            * 100
+        )
+
+    else:
+
+        imb = 0.0
+
+    # -----------------------------------------------------
+    # SIGNAL SCORES
+    # -----------------------------------------------------
+
+    momentum = clamp(
+        50
+        + mom6 * 7
+        + mom24 * 2
+        + change * 1.5
+    )
+
+    volume_score = clamp(
+        50
+        + (vr - 1) * 30
+    )
+
+    liquidity = clamp(
+        50
+        + imb * 2
+    )
+
+    sentiment = clamp(
+        50
+        + change * 2
+        + (vr - 1) * 10
+    )
+
+    risk = clamp(
+        35
+        + vol * 12
+        + rng * 1.2
+    )
+
+    # -----------------------------------------------------
+    # ALPHA SCORE
+    # -----------------------------------------------------
+
+    alpha = (
+        0.30 * momentum
+        + 0.20 * volume_score
+        + 0.20 * sentiment
+        + 0.15 * liquidity
+        + 0.15 * (100 - risk)
+    )
+
+    # -----------------------------------------------------
+    # MARKET REGIME
+    # -----------------------------------------------------
+
+    if alpha >= 75:
+
+        regime = "Bullish"
+
+    elif alpha >= 60:
+
+        regime = "Constructive"
+
+    elif alpha >= 45:
+
+        regime = "Neutral"
+
+    elif alpha >= 30:
+
+        regime = "Cautious"
+
+    else:
+
+        regime = "Bearish"
+
+    # -----------------------------------------------------
+    # RETURN
+    # -----------------------------------------------------
+
+    return {
+        "alpha_score": round(alpha),
+        "regime": regime,
+
+        "momentum": round(momentum),
+        "volume": round(volume_score),
+        "liquidity": round(liquidity),
+        "sentiment": round(sentiment),
+        "risk": round(risk),
+
+        "price": last,
+        "change": change,
+        "volume_ratio": vr,
+        "range24": rng,
+        "imbalance": imb,
+    }
