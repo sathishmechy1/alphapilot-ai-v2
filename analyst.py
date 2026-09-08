@@ -1,5 +1,4 @@
 from scoring import compute
-
 def analyze(symbol,snap):
     s=compute(snap); positives=[]; warnings=[]; invalidations=[]
     if s["momentum"]>=70: positives.append("strong short-term momentum")
