@@ -1,15 +1,14 @@
-import inspect
 import re
 
 import plotly.graph_objects as go
 import streamlit as st
 
-import analyst
 from market_data import snapshot
+from scoring import compute
 
 
 # =========================================================
-# PAGE CONFIG
+# PAGE
 # =========================================================
 
 st.set_page_config(
@@ -20,13 +19,12 @@ st.set_page_config(
 
 
 # =========================================================
-# CUSTOM CSS
+# STYLE
 # =========================================================
 
 st.markdown(
     """
 <style>
-
 .stApp {
     background: radial-gradient(
         circle at 15% 0%,
@@ -41,17 +39,12 @@ st.markdown(
     padding-top: 2rem;
 }
 
-.hero,
-.card {
-    border-radius: 20px;
-    background: #11151a;
-    border: 1px solid #292e35;
-}
-
 .hero {
     padding: 28px 30px;
     margin-bottom: 22px;
-    border-color: #5a481f;
+    border-radius: 20px;
+    background: #11151a;
+    border: 1px solid #5a481f;
 }
 
 .hero h1 {
@@ -76,6 +69,9 @@ st.markdown(
 .card {
     padding: 20px;
     height: 100%;
+    border-radius: 20px;
+    background: #11151a;
+    border: 1px solid #292e35;
 }
 
 .score {
@@ -100,21 +96,12 @@ st.markdown(
     margin: 7px 0;
 }
 
-.copilot-card {
-    padding: 18px;
-    border-radius: 16px;
-    background: #101419;
-    border: 1px solid #343a42;
-    margin-bottom: 15px;
-}
-
 .footer {
     text-align: center;
     color: #6f767f;
     font-size: .78rem;
     padding: 28px 0 8px;
 }
-
 </style>
 """,
     unsafe_allow_html=True,
@@ -128,74 +115,129 @@ st.markdown(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "last_report" not in st.session_state:
-    st.session_state.last_report = None
+if "last_symbol" not in st.session_state:
+    st.session_state.last_symbol = "SOLUSDT"
 
 if "last_snapshot" not in st.session_state:
     st.session_state.last_snapshot = None
 
-if "last_symbol" not in st.session_state:
-    st.session_state.last_symbol = "SOLUSDT"
+if "last_metrics" not in st.session_state:
+    st.session_state.last_metrics = None
 
 
 # =========================================================
-# COMPATIBILITY ANALYZER
+# ALPHA REPORT
 # =========================================================
 
-def run_alpha_analysis(symbol, snap):
+def build_report(symbol, snap):
     """
-    Supports both possible analyst.py versions:
+    Build the explainable AlphaPilot report directly from
+    scoring.py.
 
-        analyze(symbol, snap)
-
-    and:
-
-        analyze(snap)
-
-    This prevents the deployed Streamlit app from failing
-    if an older analyst.py version is still being loaded.
+    This intentionally does NOT import or call analyst.py.
     """
 
-    fn = analyst.analyze
+    s = compute(snap)
 
-    try:
-        signature = inspect.signature(fn)
-        params = list(signature.parameters.values())
+    positives = []
+    warnings = []
+    invalidations = []
 
-        positional = [
-            p
-            for p in params
-            if p.kind in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            )
-        ]
+    if s["momentum"] >= 70:
+        positives.append("strong short-term momentum")
+    elif s["momentum"] < 40:
+        warnings.append("weak short-term momentum")
 
-        if len(positional) >= 2:
-            return fn(symbol, snap)
+    if s["volume"] >= 65:
+        positives.append("above-baseline trading activity")
+    elif s["volume"] < 40:
+        warnings.append("muted volume")
 
-        return fn(snap)
+    if s["liquidity"] >= 65:
+        positives.append("supportive order-book imbalance")
+    elif s["liquidity"] < 40:
+        warnings.append("sell-side order-book pressure")
 
-    except (TypeError, ValueError):
-        # Fallback for unusual callable signatures
-        try:
-            return fn(symbol, snap)
-        except TypeError:
-            return fn(snap)
+    if s["risk"] >= 70:
+        warnings.append("elevated volatility risk")
+        invalidations.append(
+            "A sharp volatility expansion could quickly change the score."
+        )
+    elif s["risk"] <= 40:
+        positives.append("relatively contained volatility")
+
+    if s["change"] < -3:
+        invalidations.append(
+            "A continued 24h decline would weaken the momentum case."
+        )
+
+    if s["volume_ratio"] < 0.75:
+        invalidations.append(
+            "Further volume deterioration would reduce conviction."
+        )
+
+    if s["imbalance"] < -10:
+        invalidations.append(
+            "Persistent sell-side order-book pressure would be a bearish confirmation."
+        )
+
+    if not positives:
+        positives.append("mixed market signals")
+
+    if not warnings:
+        warnings.append(
+            "no major risk flag from the current snapshot"
+        )
+
+    if not invalidations:
+        invalidations.append(
+            "A material change in price, volume or order-book balance "
+            "could change the signal."
+        )
+
+    summary = (
+        f"{symbol} scores {s['alpha_score']}/100 and is currently "
+        f"{s['regime'].lower()}. Strongest signals: "
+        f"{', '.join(positives[:2])}. Main watch-outs: "
+        f"{', '.join(warnings[:2])}."
+    )
+
+    return {
+        "metrics": s,
+        "positives": positives,
+        "warnings": warnings,
+        "invalidations": invalidations,
+        "summary": summary,
+    }
 
 
 # =========================================================
-# SYMBOL EXTRACTION
+# ANALYZE
+# =========================================================
+
+def run_analysis(symbol):
+
+    symbol = symbol.upper().strip()
+
+    snap = snapshot(symbol)
+
+    report = build_report(
+        symbol,
+        snap,
+    )
+
+    st.session_state.last_symbol = symbol
+    st.session_state.last_snapshot = snap
+    st.session_state.last_metrics = report["metrics"]
+
+    return snap, report
+
+
+# =========================================================
+# SYMBOL
 # =========================================================
 
 def extract_symbol(text):
-    """
-    Finds symbols such as:
-    BTCUSDT
-    ETHUSDT
-    SOLUSDT
-    BNBUSDT
-    """
 
     matches = re.findall(
         r"\b[A-Z]{2,12}USDT\b",
@@ -209,165 +251,84 @@ def extract_symbol(text):
 
 
 # =========================================================
-# RUN ANALYSIS
+# COPILOT
 # =========================================================
 
-def run_analysis(symbol):
-
-    symbol = symbol.upper().strip()
-
-    snap = snapshot(symbol)
-
-    report = run_alpha_analysis(
-        symbol,
-        snap,
-    )
-
-    st.session_state.last_symbol = symbol
-    st.session_state.last_snapshot = snap
-    st.session_state.last_report = report
-
-    return snap, report
-
-
-# =========================================================
-# COPILOT RESPONSE ENGINE
-# =========================================================
-
-def copilot_response(question, symbol, report, snap):
+def answer_question(question, symbol, report):
 
     m = report["metrics"]
-
-    q = question.lower().strip()
+    q = question.lower()
 
     score = m["alpha_score"]
-    regime = m["regime"]
 
-    # -----------------------------------------------------
-    # GENERAL ANALYSIS
-    # -----------------------------------------------------
-
-    if (
-        "analy" in q
-        or "outlook" in q
-        or "overview" in q
-        or "what do you think" in q
-        or "how does" in q
-    ):
-
-        return (
-            f"### 🤖 AlphaPilot view on {symbol}\n\n"
-            f"**Alpha Score: {score}/100 — {regime}**\n\n"
-            f"{report['summary']}\n\n"
-            f"**Signal Matrix**\n\n"
-            f"- 📈 Momentum: **{m['momentum']}/100**\n"
-            f"- 📊 Volume: **{m['volume']}/100**\n"
-            f"- 💧 Liquidity: **{m['liquidity']}/100**\n"
-            f"- 🧠 Sentiment proxy: **{m['sentiment']}/100**\n"
-            f"- 🛡️ Risk: **{m['risk']}/100**\n\n"
-            f"**Main watch-out:** "
-            f"{report['warnings'][0]}"
-        )
-
-    # -----------------------------------------------------
+    # ---------------------------------------------
     # WHY SCORE
-    # -----------------------------------------------------
+    # ---------------------------------------------
 
     if (
         ("why" in q or "explain" in q)
         and ("score" in q or "alpha" in q)
     ):
 
-        momentum_points = m["momentum"] * 0.30
-        volume_points = m["volume"] * 0.20
-        sentiment_points = m["sentiment"] * 0.20
-        liquidity_points = m["liquidity"] * 0.15
-        risk_points = (100 - m["risk"]) * 0.15
-
         return (
             f"### 🧠 Why {symbol} scored {score}/100\n\n"
-            f"AlphaPilot uses a transparent weighted model:\n\n"
-            f"- **Momentum:** {m['momentum']}/100 → "
-            f"{momentum_points:.1f} points\n"
-            f"- **Volume:** {m['volume']}/100 → "
-            f"{volume_points:.1f} points\n"
-            f"- **Sentiment:** {m['sentiment']}/100 → "
-            f"{sentiment_points:.1f} points\n"
-            f"- **Liquidity:** {m['liquidity']}/100 → "
-            f"{liquidity_points:.1f} points\n"
-            f"- **Risk adjustment:** "
-            f"{risk_points:.1f} points\n\n"
-            f"**Current regime:** {regime}\n\n"
-            f"The LLM/Copilot layer does not invent the Alpha Score; "
-            f"it explains the deterministic AlphaPilot calculation."
+            f"AlphaPilot uses a transparent quantitative model.\n\n"
+            f"- 📈 Momentum: **{m['momentum']}/100** → "
+            f"{m['momentum'] * 0.30:.1f} points\n"
+            f"- 📊 Volume: **{m['volume']}/100** → "
+            f"{m['volume'] * 0.20:.1f} points\n"
+            f"- 🧠 Sentiment: **{m['sentiment']}/100** → "
+            f"{m['sentiment'] * 0.20:.1f} points\n"
+            f"- 💧 Liquidity: **{m['liquidity']}/100** → "
+            f"{m['liquidity'] * 0.15:.1f} points\n"
+            f"- 🛡️ Risk adjustment: "
+            f"{(100 - m['risk']) * 0.15:.1f} points\n\n"
+            f"**Regime:** {m['regime']}"
         )
 
-    # -----------------------------------------------------
-    # MOMENTUM
-    # -----------------------------------------------------
-
-    if "momentum" in q:
-
-        if m["momentum"] >= 70:
-            strength = "strong"
-        elif m["momentum"] < 40:
-            strength = "weak"
-        else:
-            strength = "moderate"
-
-        return (
-            f"### 📈 {symbol} momentum\n\n"
-            f"Momentum score: **{m['momentum']}/100**.\n\n"
-            f"AlphaPilot currently considers momentum **{strength}**.\n\n"
-            f"The calculation considers recent short-term and "
-            f"24-hour price movement."
-        )
-
-    # -----------------------------------------------------
-    # VOLUME
-    # -----------------------------------------------------
-
-    if "volume" in q:
-
-        if m["volume"] >= 65:
-            activity = "above baseline"
-        elif m["volume"] < 40:
-            activity = "muted"
-        else:
-            activity = "near baseline"
-
-        return (
-            f"### 📊 {symbol} volume\n\n"
-            f"Volume score: **{m['volume']}/100**\n\n"
-            f"Volume ratio: **{m['volume_ratio']:.2f}x** "
-            f"the recent baseline.\n\n"
-            f"Trading activity is currently **{activity}**."
-        )
-
-    # -----------------------------------------------------
+    # ---------------------------------------------
     # RISK
-    # -----------------------------------------------------
+    # ---------------------------------------------
 
     if "risk" in q:
 
-        if m["risk"] >= 70:
-            level = "elevated"
-        elif m["risk"] <= 40:
-            level = "relatively contained"
-        else:
-            level = "moderate"
-
         return (
-            f"### 🛡️ {symbol} risk\n\n"
+            f"### 🛡️ {symbol} Risk\n\n"
             f"Risk score: **{m['risk']}/100**.\n\n"
-            f"Current volatility risk is **{level}**.\n\n"
+            f"24h range: **{m['range24']:.2f}%**.\n\n"
             f"**Warning:** {report['warnings'][0]}\n\n"
             f"**Invalidation:** {report['invalidations'][0]}"
         )
 
-    # -----------------------------------------------------
+    # ---------------------------------------------
+    # MOMENTUM
+    # ---------------------------------------------
+
+    if "momentum" in q:
+
+        return (
+            f"### 📈 {symbol} Momentum\n\n"
+            f"Momentum score: **{m['momentum']}/100**.\n\n"
+            f"Recent price movement is contributing "
+            f"to the current Alpha Score."
+        )
+
+    # ---------------------------------------------
+    # VOLUME
+    # ---------------------------------------------
+
+    if "volume" in q:
+
+        return (
+            f"### 📊 {symbol} Volume\n\n"
+            f"Volume score: **{m['volume']}/100**.\n\n"
+            f"Current volume ratio: **{m['volume_ratio']:.2f}x** "
+            f"recent baseline."
+        )
+
+    # ---------------------------------------------
     # ORDER BOOK
-    # -----------------------------------------------------
+    # ---------------------------------------------
 
     if (
         "order book" in q
@@ -376,60 +337,49 @@ def copilot_response(question, symbol, report, snap):
         or "pressure" in q
     ):
 
-        if m["imbalance"] > 10:
-            pressure = "buy-side"
-        elif m["imbalance"] < -10:
-            pressure = "sell-side"
-        else:
-            pressure = "relatively balanced"
+        pressure = (
+            "buy-side"
+            if m["imbalance"] > 10
+            else "sell-side"
+            if m["imbalance"] < -10
+            else "relatively balanced"
+        )
 
         return (
-            f"### 📚 {symbol} order-book pressure\n\n"
-            f"Liquidity score: **{m['liquidity']}/100**\n\n"
-            f"Order-book imbalance: **{m['imbalance']:.1f}%**.\n\n"
+            f"### 📚 {symbol} Order Book\n\n"
+            f"Liquidity score: **{m['liquidity']}/100**.\n\n"
+            f"Imbalance: **{m['imbalance']:.1f}%**.\n\n"
             f"Current pressure is **{pressure}**."
         )
 
-    # -----------------------------------------------------
+    # ---------------------------------------------
     # PRICE
-    # -----------------------------------------------------
+    # ---------------------------------------------
 
-    if (
-        "price" in q
-        or "current price" in q
-        or "how much" in q
-    ):
+    if "price" in q or "current" in q:
 
         return (
             f"### 💰 {symbol}\n\n"
             f"Current price: **{m['price']:,.4f}**\n\n"
             f"24h change: **{m['change']:.2f}%**\n\n"
-            f"24h range: **{m['range24']:.2f}%**"
+            f"24h range: **{m['range24']:.2f}%**."
         )
 
-    # -----------------------------------------------------
-    # DEFAULT
-    # -----------------------------------------------------
+    # ---------------------------------------------
+    # DEFAULT / ANALYSIS
+    # ---------------------------------------------
 
     return (
-        f"### 🤖 AlphaPilot Copilot\n\n"
-        f"I analyzed **{symbol}** using the current "
-        f"AlphaPilot market snapshot.\n\n"
-        f"**Alpha Score:** {score}/100\n\n"
-        f"**Regime:** {regime}\n\n"
-        f"**Price:** {m['price']:,.4f}\n\n"
-        f"**24h change:** {m['change']:.2f}%\n\n"
-        f"**Momentum:** {m['momentum']}/100\n\n"
-        f"**Volume:** {m['volume']}/100\n\n"
-        f"**Liquidity:** {m['liquidity']}/100\n\n"
-        f"**Risk:** {m['risk']}/100\n\n"
-        f"Try asking:\n\n"
-        f"- `Analyze SOLUSDT`\n"
-        f"- `Why is the score low?`\n"
-        f"- `How is momentum?`\n"
-        f"- `What is the risk?`\n"
-        f"- `What's the order-book pressure?`\n"
-        f"- `What is the current price?`"
+        f"### 🤖 AlphaPilot Analysis — {symbol}\n\n"
+        f"**Alpha Score: {score}/100 — {m['regime']}**\n\n"
+        f"{report['summary']}\n\n"
+        f"**Signals**\n\n"
+        f"- 📈 Momentum: **{m['momentum']}/100**\n"
+        f"- 📊 Volume: **{m['volume']}/100**\n"
+        f"- 💧 Liquidity: **{m['liquidity']}/100**\n"
+        f"- 🧠 Sentiment: **{m['sentiment']}/100**\n"
+        f"- 🛡️ Risk: **{m['risk']}/100**\n\n"
+        f"**Main watch-out:** {report['warnings'][0]}"
     )
 
 
@@ -444,7 +394,7 @@ st.markdown(
 <h1>🚀 AlphaPilot Copilot</h1>
 
 <p>
-Your explainable Binance market intelligence copilot.
+Turn Binance market data into explainable crypto intelligence.
 </p>
 
 <span class="badge">
@@ -458,27 +408,21 @@ BINANCE AGENT OS • MCP-FIRST • ANALYTICS
 
 
 # =========================================================
-# COPILOT
+# CHAT
 # =========================================================
 
 st.subheader("🤖 AlphaPilot Copilot")
 
 st.caption(
-    "Ask AlphaPilot about a Binance symbol. "
-    "Examples: Analyze SOLUSDT · Why is the score low? · "
-    "What is the risk?"
+    "Ask AlphaPilot about BTCUSDT, SOLUSDT, ETHUSDT, BNBUSDT..."
 )
 
-
-# Display conversation history
 
 for message in st.session_state.messages:
 
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-
-# Chat input
 
 prompt = st.chat_input(
     "Ask AlphaPilot about BTCUSDT, SOLUSDT, ETHUSDT..."
@@ -507,20 +451,17 @@ if prompt:
                 f"Analyzing {symbol}..."
             ):
 
-                snap, report = run_analysis(symbol)
+                snap, report = run_analysis(
+                    symbol
+                )
 
-                answer = copilot_response(
+                response = answer_question(
                     prompt,
                     symbol,
                     report,
-                    snap,
                 )
 
-            st.markdown(answer)
-
-            # ---------------------------------------------
-            # DATA SOURCE
-            # ---------------------------------------------
+            st.markdown(response)
 
             if snap.get("source") == "Binance Agent OS MCP":
 
@@ -531,108 +472,86 @@ if prompt:
             else:
 
                 st.warning(
-                    "⚠️ Binance Agentic MCP authentication is not "
-                    "established in this Streamlit app yet. "
-                    "Market data is currently using Binance public REST."
+                    "⚠️ Authenticated Binance Agentic MCP is not "
+                    "connected to this Streamlit app yet. "
+                    "Using Binance public market data."
                 )
 
         except Exception as exc:
 
-            answer = (
-                f"### ❌ Analysis error\n\n"
-                f"Could not analyze **{symbol}**.\n\n"
-                f"Technical detail:\n\n"
+            response = (
+                f"❌ Could not analyze **{symbol}**.\n\n"
                 f"`{exc}`"
             )
 
-            st.error(answer)
+            st.error(response)
 
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": answer,
+            "content": response,
         }
     )
 
 
 # =========================================================
-# QUICK MARKET ANALYSIS
+# QUICK ANALYSIS
 # =========================================================
 
 st.divider()
 
 st.subheader("⚡ Quick Market Analysis")
 
-c1, c2 = st.columns([1, 4])
+symbol_input = st.text_input(
+    "Binance Symbol",
+    value=st.session_state.last_symbol,
+)
 
 
-with c1:
-
-    quick_symbol = st.text_input(
-        "Symbol",
-        value=st.session_state.last_symbol,
-        label_visibility="collapsed",
-    ).upper().strip()
+analyze_button = st.button(
+    "🔎 Analyze Market",
+    type="primary",
+    use_container_width=True,
+)
 
 
-with c2:
+if analyze_button:
 
-    analyze_button = st.button(
-        "🔎 Analyze Market",
-        type="primary",
-        use_container_width=True,
-    )
-
-
-# =========================================================
-# ANALYSIS DASHBOARD
-# =========================================================
-
-if analyze_button and quick_symbol:
+    symbol = symbol_input.upper().strip()
 
     try:
 
         with st.spinner(
-            f"Querying Binance market data for {quick_symbol}..."
+            f"Querying Binance market data for {symbol}..."
         ):
 
             snap, report = run_analysis(
-                quick_symbol
+                symbol
             )
 
         m = report["metrics"]
-        k = snap["klines"]
 
-        # -------------------------------------------------
-        # SOURCE STATUS
-        # -------------------------------------------------
+        # ---------------------------------------------
+        # SOURCE
+        # ---------------------------------------------
 
         if snap.get("source") == "Binance Agent OS MCP":
 
             st.success(
-                "🔌 Binance Agent OS MCP connected — "
-                "market data retrieved through MCP."
+                "🔌 Binance Agent OS MCP connected."
             )
 
         else:
 
             st.warning(
-                "⚠️ Binance Agentic MCP is not authenticated "
-                "in this Streamlit app. Using public Binance "
-                "market data."
+                "⚠️ Using Binance public market data. "
+                "Authenticated Agentic MCP is not connected "
+                "to this Streamlit app yet."
             )
 
-            if snap.get("mcp_error"):
-                st.caption(
-                    "MCP status: "
-                    + str(snap["mcp_error"])
-                )
-
-        # -------------------------------------------------
-        # TOP METRICS
-        # -------------------------------------------------
-
-        st.divider()
+        # ---------------------------------------------
+        # METRICS
+        # ---------------------------------------------
 
         a, b, c, d = st.columns(4)
 
@@ -665,15 +584,13 @@ if analyze_button and quick_symbol:
                 f'{m["volume_ratio"]:.2f}x',
             )
 
-        # -------------------------------------------------
-        # ALPHA SCORE + RISK
-        # -------------------------------------------------
+        # ---------------------------------------------
+        # SCORE
+        # ---------------------------------------------
 
         st.divider()
 
-        left, right = st.columns(
-            [1.15, 1]
-        )
+        left, right = st.columns(2)
 
         with left:
 
@@ -727,9 +644,8 @@ if analyze_button and quick_symbol:
                 unsafe_allow_html=True,
             )
 
-            st.markdown(
-                '<div class="small">Risk Scanner</div>',
-                unsafe_allow_html=True,
+            st.subheader(
+                "🛡️ Risk Scanner"
             )
 
             st.metric(
@@ -752,13 +668,15 @@ if analyze_button and quick_symbol:
                 unsafe_allow_html=True,
             )
 
-        # -------------------------------------------------
-        # PRICE CHART
-        # -------------------------------------------------
+        # ---------------------------------------------
+        # CHART
+        # ---------------------------------------------
 
         st.subheader(
             "📈 Price & Activity"
         )
+
+        k = snap["klines"]
 
         fig = go.Figure(
             go.Candlestick(
@@ -767,7 +685,7 @@ if analyze_button and quick_symbol:
                 high=k["high"],
                 low=k["low"],
                 close=k["close"],
-                name=quick_symbol,
+                name=symbol,
             )
         )
 
@@ -791,9 +709,9 @@ if analyze_button and quick_symbol:
             use_container_width=True,
         )
 
-        # -------------------------------------------------
+        # ---------------------------------------------
         # SIGNAL MATRIX
-        # -------------------------------------------------
+        # ---------------------------------------------
 
         st.subheader(
             "🔎 Signal Matrix"
@@ -801,16 +719,14 @@ if analyze_button and quick_symbol:
 
         cols = st.columns(4)
 
-        signals = [
-            ("Momentum", m["momentum"]),
-            ("Volume", m["volume"]),
-            ("Liquidity", m["liquidity"]),
-            ("Sentiment", m["sentiment"]),
-        ]
-
         for col, (name, value) in zip(
             cols,
-            signals,
+            [
+                ("Momentum", m["momentum"]),
+                ("Volume", m["volume"]),
+                ("Liquidity", m["liquidity"]),
+                ("Sentiment", m["sentiment"]),
+            ],
         ):
 
             with col:
@@ -827,9 +743,9 @@ if analyze_button and quick_symbol:
                     unsafe_allow_html=True,
                 )
 
-        # -------------------------------------------------
-        # WHY SCORE + RISK
-        # -------------------------------------------------
+        # ---------------------------------------------
+        # EXPLANATION / RISK
+        # ---------------------------------------------
 
         left, right = st.columns(2)
 
@@ -844,20 +760,33 @@ if analyze_button and quick_symbol:
                 "🧠 Why this score?"
             )
 
-            for name, value in [
-                ("Momentum", m["momentum"]),
-                ("Volume", m["volume"]),
-                ("Liquidity", m["liquidity"]),
-                ("Sentiment", m["sentiment"]),
-            ]:
+            st.markdown(
+                f"**Momentum — {m['momentum']}/100**"
+            )
+            st.progress(
+                m["momentum"] / 100
+            )
 
-                st.markdown(
-                    f"**{name} — {value}/100**"
-                )
+            st.markdown(
+                f"**Volume — {m['volume']}/100**"
+            )
+            st.progress(
+                m["volume"] / 100
+            )
 
-                st.progress(
-                    value / 100
-                )
+            st.markdown(
+                f"**Liquidity — {m['liquidity']}/100**"
+            )
+            st.progress(
+                m["liquidity"] / 100
+            )
+
+            st.markdown(
+                f"**Sentiment — {m['sentiment']}/100**"
+            )
+            st.progress(
+                m["sentiment"] / 100
+            )
 
             st.markdown(
                 '</div>',
@@ -875,10 +804,10 @@ if analyze_button and quick_symbol:
                 "🛡️ AI Risk Brief"
             )
 
-            for item in report["warnings"]:
+            for warning in report["warnings"]:
 
                 st.warning(
-                    "⚠ " + item
+                    "⚠ " + warning
                 )
 
             st.markdown(
@@ -896,10 +825,6 @@ if analyze_button and quick_symbol:
                 unsafe_allow_html=True,
             )
 
-        # -------------------------------------------------
-        # DISCLAIMER
-        # -------------------------------------------------
-
         st.info(
             "Alpha Score is a transparent heuristic for this "
             "hackathon prototype. It is not financial advice "
@@ -909,7 +834,7 @@ if analyze_button and quick_symbol:
     except Exception as exc:
 
         st.error(
-            f"Could not analyze {quick_symbol}."
+            f"Could not analyze {symbol}."
         )
 
         st.caption(
@@ -929,4 +854,4 @@ st.markdown(
 </div>
 """,
     unsafe_allow_html=True,
-)
+        )
