@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 from market_data import snapshot
 from analyst import analyze
 
-st.set_page_config(page_title="AlphaPilot AI", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="AlphaPilot AI", page_icon="ðŸš€", layout="wide")
 st.markdown("""<style>
 .stApp{background:radial-gradient(circle at 15% 0%,#17130a 0%,#0b0e11 34%);color:#f5f5f5}
 .block-container{max-width:1180px;padding-top:2rem}
@@ -17,14 +17,14 @@ st.markdown("""<style>
 .footer{text-align:center;color:#6f767f;font-size:.78rem;padding:28px 0 8px}
 </style>""",unsafe_allow_html=True)
 
-st.markdown("""<div class="hero"><h1>🚀 AlphaPilot AI</h1>
+st.markdown("""<div class="hero"><h1>ðŸš€ AlphaPilot AI</h1>
 <p>Turn Binance market data into explainable crypto intelligence.</p>
-<span class="badge">BINANCE AGENT OS • MCP-FIRST • READ-ONLY</span></div>""",unsafe_allow_html=True)
+<span class="badge">BINANCE AGENT OS â€¢ MCP-FIRST â€¢ READ-ONLY</span></div>""",unsafe_allow_html=True)
 
 symbol=st.text_input("Enter a Binance symbol","SOLUSDT").upper().strip()
 c1,c2=st.columns([1,5])
-with c1: go_btn=st.button("⚡ Analyze",type="primary",use_container_width=True)
-with c2: st.caption("Try: SOLUSDT · BTCUSDT · ETHUSDT · BNBUSDT")
+with c1: go_btn=st.button("âš¡ Analyze",type="primary",use_container_width=True)
+with c2: st.caption("Try: SOLUSDT Â· BTCUSDT Â· ETHUSDT Â· BNBUSDT")
 
 if go_btn:
     try:
@@ -33,11 +33,15 @@ if go_btn:
         m=report["metrics"]; k=snap["klines"]
 
         if snap.get("source") == "Binance Agent OS MCP":
-            st.success("🔌 Binance Agent OS MCP connected — market data retrieved through MCP.")
+            st.success("ðŸ”Œ Binance Agent OS MCP connected â€” market data retrieved through MCP.")
             with st.expander("MCP tools used"):
                 st.json(snap.get("mcp_tools", {}))
+        elif snap.get("mcp_status") == "auth_required":
+            st.warning("ðŸ”’ Binance Agent OS MCP requires a personal, per-account Binance authorization for every call. This public demo has no signed-in account, so it uses Binance's public market-data API instead â€” the numbers are the same public data either way.")
+            with st.expander("Technical detail"):
+                st.caption(snap.get("mcp_error", ""))
         else:
-            st.warning("⚠️ Binance MCP was temporarily unavailable. Using public Binance market-data fallback.")
+            st.warning("âš ï¸ Binance MCP was temporarily unavailable. Using public Binance market-data fallback.")
             if snap.get("mcp_error"):
                 st.caption(snap["mcp_error"])
 
@@ -47,7 +51,7 @@ if go_btn:
             st.markdown('<div class="card">',unsafe_allow_html=True)
             st.markdown('<div class="small">Alpha Score</div>',unsafe_allow_html=True)
             st.markdown(f'<div class="score">{m["alpha_score"]}<span style="font-size:24px;color:#777">/100</span></div>',unsafe_allow_html=True)
-            icon="🟢" if m["alpha_score"]>=60 else "🟡" if m["alpha_score"]>=45 else "🔴"
+            icon="ðŸŸ¢" if m["alpha_score"]>=60 else "ðŸŸ¡" if m["alpha_score"]>=45 else "ðŸ”´"
             st.subheader(f"{icon} {m['regime']}"); st.write(report["summary"])
             st.markdown('</div>',unsafe_allow_html=True)
         with b:
@@ -61,25 +65,25 @@ if go_btn:
             st.metric("Risk",f'{m["risk"]}/100'); st.metric("24h Range",f'{m["range24"]:.2f}%'); st.metric("Order-book Bias",f'{m["imbalance"]:.1f}%')
             st.markdown('</div>',unsafe_allow_html=True)
 
-        st.subheader("📈 Price & Activity")
+        st.subheader("ðŸ“ˆ Price & Activity")
         fig=go.Figure(go.Candlestick(x=k["open_time"],open=k["open"],high=k["high"],low=k["low"],close=k["close"],name=symbol))
         fig.update_layout(height=430,margin=dict(l=10,r=10,t=10,b=10),template="plotly_dark",xaxis_rangeslider_visible=False,paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=False)
         st.plotly_chart(fig,use_container_width=True)
 
         left,right=st.columns(2)
         with left:
-            st.markdown('<div class="card">',unsafe_allow_html=True); st.subheader("🧠 Why this score?")
+            st.markdown('<div class="card">',unsafe_allow_html=True); st.subheader("ðŸ§  Why this score?")
             for name,val in [("Momentum",m["momentum"]),("Volume",m["volume"]),("Liquidity",m["liquidity"]),("Sentiment proxy",m["sentiment"])]:
-                st.markdown(f"**{name} — {val}/100**"); st.progress(val/100)
+                st.markdown(f"**{name} â€” {val}/100**"); st.progress(val/100)
             st.markdown('</div>',unsafe_allow_html=True)
         with right:
-            st.markdown('<div class="card">',unsafe_allow_html=True); st.subheader("🛡️ AI Risk Brief")
-            for item in report["warnings"]: st.warning("⚠ "+item)
+            st.markdown('<div class="card">',unsafe_allow_html=True); st.subheader("ðŸ›¡ï¸ AI Risk Brief")
+            for item in report["warnings"]: st.warning("âš  "+item)
             st.markdown("**What could invalidate the setup?**")
-            for item in report["invalidations"]: st.write("• "+item)
+            for item in report["invalidations"]: st.write("â€¢ "+item)
             st.markdown('</div>',unsafe_allow_html=True)
 
-        st.subheader("🔎 Signal Matrix")
+        st.subheader("ðŸ”Ž Signal Matrix")
         cols=st.columns(4)
         for col,(name,val) in zip(cols,[("Momentum",m["momentum"]),("Volume",m["volume"]),("Liquidity",m["liquidity"]),("Sentiment",m["sentiment"])]):
             with col: st.markdown(f'<div class="signal"><b>{name}</b><br><span style="font-size:1.4rem">{val}/100</span></div>',unsafe_allow_html=True)
@@ -87,6 +91,6 @@ if go_btn:
     except Exception as e:
         st.error(f"Could not analyze {symbol}."); st.caption(f"Technical detail: {e}")
 else:
-    st.markdown('<div class="card"><h3>How AlphaPilot works</h3><p>1️⃣ Binance Agent OS MCP → 2️⃣ market signals → 3️⃣ Alpha Score → 4️⃣ explainable risk analysis.</p></div>',unsafe_allow_html=True)
+    st.markdown('<div class="card"><h3>How AlphaPilot works</h3><p>1ï¸âƒ£ Binance Agent OS MCP â†’ 2ï¸âƒ£ market signals â†’ 3ï¸âƒ£ Alpha Score â†’ 4ï¸âƒ£ explainable risk analysis.</p></div>',unsafe_allow_html=True)
 
-st.markdown('<div class="footer">AlphaPilot AI • Binance Agent OS Mini Hackathon • MCP-first read-only prototype</div>',unsafe_allow_html=True)
+st.markdown('<div class="footer">AlphaPilot AI â€¢ Binance Agent OS Mini Hackathon â€¢ MCP-first read-only prototype</div>',unsafe_allow_html=True)
