@@ -20,8 +20,23 @@ ALLOWED_TOOLS = {
 class MCPError(RuntimeError):
     pass
 
+class MCPAuthError(MCPError):
+    """Raised when the MCP server rejects the request for lack of a valid,
+    per-account authorization (HTTP 401/403). This is a structural
+    condition for this server, not a transient outage: Binance's Agentic
+    MCP endpoint requires an authenticated per-account session for every
+    call, including read-only ones. A public, no-login deployment has no
+    such session, so this error is expected in that context rather than a
+    bug to retry."""
+    pass
+
 def _parse_response(response):
     content_type = response.headers.get("content-type", "")
+    if response.status_code in (401, 403):
+        raise MCPAuthError(
+            f"Binance MCP HTTP {response.status_code} (authorization required): "
+            f"{response.text[:300]}"
+        )
     if response.status_code >= 400:
         raise MCPError(f"Binance MCP HTTP {response.status_code}: {response.text[:300]}")
 
@@ -208,4 +223,4 @@ def snapshot_via_mcp(symbol):
             "order_book": book_tool["name"],
             "klines": candle_tool["name"],
         },
-        }
+    }
