@@ -1,7 +1,7 @@
 import requests
 import pandas as pd
 
-BASE = "https://api.binance.com"
+BASE = "https://data-api.binance.vision" 
 
 def _get(path, params=None):
     r = requests.get(BASE + path, params=params, timeout=10)
