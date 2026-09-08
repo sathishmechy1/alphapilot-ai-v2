@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-from mcp_bridge import snapshot_via_mcp, MCPError
+from mcp_bridge import snapshot_via_mcp, MCPError, MCPAuthError
 
 BASE = "https://data-api.binance.vision"
 
@@ -25,8 +25,17 @@ def _rest_snapshot(symbol):
             "mcp_tools": {}}
 
 def snapshot(symbol):
-    # MCP is the primary path. REST fallback only keeps the public demo usable
-    # if the remote MCP endpoint is temporarily unavailable.
+    # MCP is the primary path. REST fallback keeps the public demo usable
+    # when the remote MCP endpoint can't be used.
+    #
+    # Note on mcp_status: Binance's Agentic MCP server requires a valid,
+    # per-account authorization for every call, including read-only ones
+    # (see Binance's own docs for agent.binance.com/mcp/agentic). This
+    # public, no-login demo has no such session, so an auth_required
+    # (HTTP 401/403) outcome here is an expected, structural condition,
+    # not a transient outage. Other failures (network errors, unexpected
+    # response shapes, etc.) are tagged "unavailable" and may genuinely
+    # be transient.
     try:
         raw = snapshot_via_mcp(symbol)
         ticker = raw["ticker"]
@@ -64,7 +73,14 @@ def snapshot(symbol):
                 "source": "Binance Agent OS MCP",
                 "mcp_tools": raw["mcp_tools"]}
 
+    except MCPAuthError as exc:
+        data = _rest_snapshot(symbol)
+        data["mcp_error"] = str(exc)
+        data["mcp_status"] = "auth_required"
+        return data
+
     except Exception as exc:
         data = _rest_snapshot(symbol)
         data["mcp_error"] = str(exc)
+        data["mcp_status"] = "unavailable"
         return data
