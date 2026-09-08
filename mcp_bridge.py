@@ -4,6 +4,19 @@ import requests
 MCP_URL = "https://agent.binance.com/mcp/agentic"
 PROTOCOL_VERSION = "2025-06-18"
 
+# Explicit allowlist of read-only spot market-data tools this bridge is
+# permitted to call. Trading, transfer, withdrawal, margin, futures, and
+# wallet tools are intentionally excluded and can never be selected here,
+# even if a future server tool-list change causes keyword matching to
+# otherwise drift toward them.
+ALLOWED_TOOLS = {
+    "spot.ticker24hr",
+    "spot.tickerPrice",
+    "spot.depth",
+    "spot.klines",
+    "spot.uiKlines",
+}
+
 class MCPError(RuntimeError):
     pass
 
@@ -109,6 +122,13 @@ def _make_args(tool, symbol, preferred_limit=None):
     return args
 
 def _call_tool(tool, symbol, preferred_limit=None, request_id=10):
+    # Hard stop: never call anything outside the read-only spot allowlist,
+    # regardless of how it was selected.
+    if tool["name"] not in ALLOWED_TOOLS:
+        raise MCPError(
+            f"Refusing to call non-allowlisted MCP tool '{tool['name']}'. "
+            f"Allowed tools: {', '.join(sorted(ALLOWED_TOOLS))}"
+        )
     sid = _initialize()
     _notify_initialized(sid)
     args = _make_args(tool, symbol, preferred_limit)
@@ -136,8 +156,13 @@ def _decode(text):
         return text
 
 def _pick(tools, groups):
+    # Only consider tools on the read-only spot allowlist. This prevents
+    # keyword matches (e.g. "kline", "depth") from ever resolving to a
+    # futures, margin, convert, or wallet tool that happens to share
+    # vocabulary with the spot market-data tools we actually want.
+    candidates = [t for t in tools if t.get("name") in ALLOWED_TOOLS]
     scored = []
-    for tool in tools:
+    for tool in candidates:
         hay = (tool.get("name", "") + " " + tool.get("description", "")).lower()
         score = sum(1 for term in groups if term in hay)
         if score:
@@ -164,8 +189,11 @@ def snapshot_via_mcp(symbol):
         candle_tool = _pick(tools, ["ohlcv"])
 
     if not ticker_tool or not book_tool or not candle_tool:
-        names = [t.get("name", "") for t in tools]
-        raise MCPError("Required market-data tools not found. Available: " + ", ".join(names[:30]))
+        names = [t.get("name", "") for t in tools if t.get("name") in ALLOWED_TOOLS]
+        raise MCPError(
+            "Required read-only spot market-data tools not found among "
+            "allowlisted tools. Available: " + ", ".join(names[:30])
+        )
 
     ticker_raw = _decode(_tool_text(_call_tool(ticker_tool, symbol, request_id=11)))
     book_raw = _decode(_tool_text(_call_tool(book_tool, symbol, preferred_limit=50, request_id=12)))
@@ -180,4 +208,4 @@ def snapshot_via_mcp(symbol):
             "order_book": book_tool["name"],
             "klines": candle_tool["name"],
         },
-    }
+        }
