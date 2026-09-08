@@ -37,7 +37,7 @@ if go_btn:
             with st.expander("MCP tools used"):
                 st.json(snap.get("mcp_tools", {}))
         elif snap.get("mcp_status") == "auth_required":
-            st.warning("ðŸ”’ Binance Agent OS MCP requires a personal, per-account Binance authorization for every call. This public demo has no signed-in account, so it uses Binance's public market-data API instead â€” the numbers are the same public data either way.")
+            st.warning("ðŸ”’ Binance Agent OS MCP requires a personal, per-account Binance authorization for every call. This public demo has no signed-in account, so it uses Binance's public market-data API instead - the numbers are the same public data either way.")
             with st.expander("Technical detail"):
                 st.caption(snap.get("mcp_error", ""))
         else:
