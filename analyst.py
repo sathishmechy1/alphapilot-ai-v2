@@ -1,4 +1,4 @@
-from .scoring import compute
+from scoring import compute
 
 def analyze(symbol, snap):
     s = compute(snap)
