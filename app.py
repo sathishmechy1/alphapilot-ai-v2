@@ -1,6 +1,6 @@
 import streamlit as st
-from agent.market_data import snapshot
-from agent.analyst import analyze
+from market_data import snapshot
+from analyst import analyze
 
 st.set_page_config(page_title="AlphaPilot AI", page_icon="🚀", layout="wide")
 st.markdown('''<style>
